@@ -27,7 +27,6 @@ jobs:
     env:
       LOCAL_IMAGE: testbed-app:ci
       TARGET_IMAGE: ghcr.io/${{ github.repository }}
-      OUT: ${{ runner.temp }}/scans
     steps:
       - uses: actions/checkout@v4
 
@@ -44,6 +43,8 @@ jobs:
         run: docker build -t "$LOCAL_IMAGE" .
 
       - name: Scan (Trivy, Grype, OSV-Scanner)
+        env:
+          OUT: ${{ runner.temp }}/scans
         run: scripts/scan.sh
 
       - name: Keep the scanner files
@@ -57,6 +58,7 @@ jobs:
       - name: Send to the hub
         if: always()
         env:
+          OUT: ${{ runner.temp }}/scans
           HUB_URL: ${{ vars.HUB_URL }}
           HUB_CI_TOKEN: ${{ secrets.HUB_CI_TOKEN }}
           SCAN_TYPE: ${{ steps.cp.outputs.type }}
