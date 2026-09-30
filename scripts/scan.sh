@@ -14,7 +14,7 @@ GRYPE="${GRYPE_IMAGE:-anchore/grype:latest}"
 OSV="${OSV_IMAGE:-ghcr.io/google/osv-scanner:latest}"
 SOCK=(-v /var/run/docker.sock:/var/run/docker.sock)
 
-mkdir -p "$OUT"
+mkdir -p "$OUT" "$OUT/extra"
 : > "$OUT/scans.tsv"
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -37,8 +37,10 @@ run() {
 # Folder (lockfiles)
 run trivy-fs.cdx.json  trivy "." cyclonedx 0 \
   docker run --rm -v "$SRC:/src:ro" -v "$OUT:/out" "$TRIVY" fs --scanners vuln --format cyclonedx --output /out/trivy-fs.cdx.json /src
-run grype-fs.cdx.json  grype "." cyclonedx 0 \
-  docker run --rm -v "$SRC:/src:ro" -v "$OUT:/out" "$GRYPE" dir:/src -o cyclonedx-json --file /out/grype-fs.cdx.json
+# Grype: native JSON is sent (it links each GHSA to its CVE); the CycloneDX
+# copy is kept in the artifact for comparison only.
+run grype-fs.json      grype "." grype-json 0 \
+  docker run --rm -v "$SRC:/src:ro" -v "$OUT:/out" "$GRYPE" dir:/src -o json=/out/grype-fs.json -o cyclonedx-json=/out/extra/grype-fs.cdx.json
 # OSV-Scanner exits 1 when it finds vulnerabilities: that is a successful scan.
 run osv-fs.json        osv   "." osv-json  1 \
   docker run --rm -v "$SRC:/src:ro" -v "$OUT:/out" "$OSV" scan source --all-packages --format json --output /out/osv-fs.json -r /src
@@ -46,7 +48,7 @@ run osv-fs.json        osv   "." osv-json  1 \
 # Docker image
 run trivy-image.cdx.json trivy "$TARGET_IMAGE" cyclonedx 0 \
   docker run --rm "${SOCK[@]}" -v "$OUT:/out" "$TRIVY" image --scanners vuln --format cyclonedx --output /out/trivy-image.cdx.json "$LOCAL_IMAGE"
-run grype-image.cdx.json grype "$TARGET_IMAGE" cyclonedx 0 \
-  docker run --rm "${SOCK[@]}" -v "$OUT:/out" "$GRYPE" "docker:$LOCAL_IMAGE" -o cyclonedx-json --file /out/grype-image.cdx.json
+run grype-image.json grype "$TARGET_IMAGE" grype-json 0 \
+  docker run --rm "${SOCK[@]}" -v "$OUT:/out" "$GRYPE" "docker:$LOCAL_IMAGE" -o json=/out/grype-image.json -o cyclonedx-json=/out/extra/grype-image.cdx.json
 
 echo "Scans:"; column -t -s $'\t' "$OUT/scans.tsv" || cat "$OUT/scans.tsv"
