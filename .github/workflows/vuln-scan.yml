@@ -1,0 +1,72 @@
+name: vuln-scan
+
+# Same scans at every checkpoint, so the hub can prove a fix everywhere a
+# vulnerability was seen:
+#   daily (and Run workflow) on production  → production scan
+#   pull request into release/**            → fix PR scan
+#   push to release/**                      → release branch scan
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+  pull_request:
+    branches: ["release/**"]
+  push:
+    branches: ["release/**"]
+
+concurrency:
+  group: vuln-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    env:
+      LOCAL_IMAGE: testbed-app:ci
+      TARGET_IMAGE: ghcr.io/${{ github.repository }}
+      OUT: ${{ runner.temp }}/scans
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out the checkpoint
+        id: cp
+        run: |
+          case "${{ github.event_name }}" in
+            pull_request) echo "type=fix_pr" >> "$GITHUB_OUTPUT" ;;
+            push)         echo "type=release_verify" >> "$GITHUB_OUTPUT" ;;
+            *)            echo "type=production" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Build the image
+        run: docker build -t "$LOCAL_IMAGE" .
+
+      - name: Scan (Trivy, Grype, OSV-Scanner)
+        run: scripts/scan.sh
+
+      - name: Keep the scanner files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scans-${{ steps.cp.outputs.type }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/scans
+          if-no-files-found: warn
+
+      - name: Send to the hub
+        if: always()
+        env:
+          HUB_URL: ${{ vars.HUB_URL }}
+          HUB_CI_TOKEN: ${{ secrets.HUB_CI_TOKEN }}
+          SCAN_TYPE: ${{ steps.cp.outputs.type }}
+          REPO_FULL: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD: ${{ github.head_ref }}
+          PR_BASE: ${{ github.base_ref }}
+          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          RUN_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: scripts/send-to-hub.sh
